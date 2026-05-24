@@ -53,7 +53,15 @@ cargo build --release
 sudo target/release/tuxedo-driver-daemon --config /etc/tuxedo-driver-daemon.toml
 ```
 
-The systemd unit template is in `systemd/tuxedo-driver-daemon.service`.
+The systemd unit templates are in `systemd/`. Install both units so the daemon
+is stopped before suspend and started again on resume:
+
+```sh
+sudo install -Dm0644 systemd/tuxedo-driver-daemon.service /etc/systemd/system/tuxedo-driver-daemon.service
+sudo install -Dm0644 systemd/tuxedo-driver-daemon-sleep.service /etc/systemd/system/tuxedo-driver-daemon-sleep.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now tuxedo-driver-daemon.service tuxedo-driver-daemon-sleep.service
+```
 
 ## License
 

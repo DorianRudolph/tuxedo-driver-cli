@@ -1,0 +1,13 @@
+[Unit]
+Description=Stop TUXEDO driver fan daemon for sleep
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c "systemctl stop tuxedo-driver-daemon.service"
+ExecStop=/bin/sh -c "systemctl start tuxedo-driver-daemon.service"
+
+[Install]
+WantedBy=sleep.target

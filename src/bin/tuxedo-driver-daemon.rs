@@ -390,7 +390,8 @@ fn run_fan_loop(io: &TuxedoIo, config: &FanConfig) -> Result<()> {
     let mut last_target = None;
     while !terminate.load(Ordering::Relaxed) {
         let target = target_speed(io, min_speed, fans_off_available, curve)?;
-        if last_target != Some(target) {
+        let target_changed = last_target != Some(target);
+        if target_changed {
             for fan in 0..fans {
                 set_fan_percent(io, fan, target)?;
             }
