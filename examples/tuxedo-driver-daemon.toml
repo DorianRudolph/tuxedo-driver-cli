@@ -1,0 +1,22 @@
+# Settings left unset are ignored on startup.
+# profile = "power_save"        # power_save, enthusiast, overboost
+# charging_profile = "balanced" # high_capacity, balanced, stationary
+# ac_auto_boot = false
+# usb_powershare = false
+# fn_lock = false
+
+[fan]
+enabled = true
+preset = "silent" # silent, quiet, balanced, cool, freezy
+interval_ms = 5000
+
+# Optional custom curve. If cpu_curve is set it replaces the preset CPU curve.
+# If gpu_curve is omitted, cpu_curve is reused for the GPU/second-fan logic.
+# The daemon uses the first entry whose temp is >= the current temperature.
+#
+# cpu_curve = [
+#   { temp = 45, speed = 0 },
+#   { temp = 60, speed = 20 },
+#   { temp = 75, speed = 50 },
+#   { temp = 95, speed = 100 },
+# ]

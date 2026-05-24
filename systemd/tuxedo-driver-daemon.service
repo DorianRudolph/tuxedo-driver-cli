@@ -1,0 +1,12 @@
+[Unit]
+Description=Minimal TUXEDO driver fan/profile daemon
+After=systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tuxedo-driver-daemon --config /etc/tuxedo-driver-daemon.toml
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
