@@ -31,6 +31,8 @@ The crate also builds `tuxedo-driver-daemon`, a small foreground systemd service
 that applies optional startup settings from TOML and controls fans with a
 configurable curve. On SIGTERM/SIGINT it asks the driver to restore firmware fan
 auto mode.
+The fan curve uses the primary fan temperature and applies the same target speed
+to every detected fan.
 
 Default config path:
 
@@ -52,3 +54,7 @@ sudo target/release/tuxedo-driver-daemon --config /etc/tuxedo-driver-daemon.toml
 ```
 
 The systemd unit template is in `systemd/tuxedo-driver-daemon.service`.
+
+## License
+
+GPL-2.0-or-later. See `LICENSE`.

@@ -2,7 +2,7 @@
 name = "tuxedo-driver-cli"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "GPL-2.0-or-later"
 
 [dependencies]
 clap = { version = "4.5.51", features = ["derive"] }

@@ -10,11 +10,10 @@ enabled = true
 preset = "silent" # silent, quiet, balanced, cool, freezy
 interval_ms = 5000
 
-# Optional custom curve. If cpu_curve is set it replaces the preset CPU curve.
-# If gpu_curve is omitted, cpu_curve is reused for the GPU/second-fan logic.
+# Optional custom curve. If set, it replaces the selected preset curve.
 # The daemon uses the first entry whose temp is >= the current temperature.
 #
-# cpu_curve = [
+# curve = [
 #   { temp = 45, speed = 0 },
 #   { temp = 60, speed = 20 },
 #   { temp = 75, speed = 50 },

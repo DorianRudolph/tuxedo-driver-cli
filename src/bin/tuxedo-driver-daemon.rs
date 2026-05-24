@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 use std::{
     error::Error,
     fs::{self, File, OpenOptions},
@@ -31,7 +33,6 @@ const R_HWCHECK_UW: IoctlReq = IoctlReq::read(IOCTL_MAGIC, 0x06, ArgKind::Ptr);
 const R_UW_FANSPEED: IoctlReq = IoctlReq::read(MAGIC_READ_UW, 0x10, ArgKind::Ptr);
 const R_UW_FANSPEED2: IoctlReq = IoctlReq::read(MAGIC_READ_UW, 0x11, ArgKind::Ptr);
 const R_UW_FAN_TEMP: IoctlReq = IoctlReq::read(MAGIC_READ_UW, 0x12, ArgKind::Ptr);
-const R_UW_FAN_TEMP2: IoctlReq = IoctlReq::read(MAGIC_READ_UW, 0x13, ArgKind::Ptr);
 const R_UW_FANS_OFF_AVAILABLE: IoctlReq = IoctlReq::read(MAGIC_READ_UW, 0x16, ArgKind::Ptr);
 const R_UW_FANS_MIN_SPEED: IoctlReq = IoctlReq::read(MAGIC_READ_UW, 0x17, ArgKind::Ptr);
 
@@ -48,6 +49,7 @@ struct Args {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Config {
     profile: Option<PerformanceProfile>,
     charging_profile: Option<String>,
@@ -59,6 +61,7 @@ struct Config {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FanConfig {
     #[serde(default = "default_fan_enabled")]
     enabled: bool,
@@ -66,8 +69,7 @@ struct FanConfig {
     interval_ms: u64,
     #[serde(default = "default_preset")]
     preset: FanPreset,
-    cpu_curve: Option<Vec<FanPoint>>,
-    gpu_curve: Option<Vec<FanPoint>>,
+    curve: Option<Vec<FanPoint>>,
 }
 
 impl Default for FanConfig {
@@ -76,8 +78,7 @@ impl Default for FanConfig {
             enabled: default_fan_enabled(),
             interval_ms: default_interval_ms(),
             preset: default_preset(),
-            cpu_curve: None,
-            gpu_curve: None,
+            curve: None,
         }
     }
 }
@@ -141,28 +142,13 @@ impl FanPreset {
         }
     }
 
-    fn curves(self) -> FanCurves<'static> {
+    fn curve(self) -> &'static [FanPoint] {
         match self {
-            Self::Silent => FanCurves {
-                cpu: &SILENT_CPU,
-                gpu: &SILENT_GPU,
-            },
-            Self::Quiet => FanCurves {
-                cpu: &QUIET_CPU,
-                gpu: &QUIET_GPU,
-            },
-            Self::Balanced => FanCurves {
-                cpu: &BALANCED_CPU,
-                gpu: &BALANCED_GPU,
-            },
-            Self::Cool => FanCurves {
-                cpu: &COOL_CPU,
-                gpu: &COOL_GPU,
-            },
-            Self::Freezy => FanCurves {
-                cpu: &FREEZY_CPU,
-                gpu: &FREEZY_GPU,
-            },
+            Self::Silent => &SILENT,
+            Self::Quiet => &QUIET,
+            Self::Balanced => &BALANCED,
+            Self::Cool => &COOL,
+            Self::Freezy => &FREEZY,
         }
     }
 }
@@ -171,11 +157,6 @@ impl FanPreset {
 struct FanPoint {
     temp: i32,
     speed: u8,
-}
-
-struct FanCurves<'a> {
-    cpu: &'a [FanPoint],
-    gpu: &'a [FanPoint],
 }
 
 #[derive(Copy, Clone)]
@@ -396,7 +377,7 @@ fn run_fan_loop(io: &TuxedoIo, config: &FanConfig) -> Result<()> {
 
     let fans_off_available = io.read_int(R_UW_FANS_OFF_AVAILABLE)? == 1;
     let min_speed = io.read_int(R_UW_FANS_MIN_SPEED)?.clamp(0, 100) as u8;
-    let curves = selected_curves(config);
+    let curve = selected_curve(config);
     let interval = Duration::from_millis(config.interval_ms.max(500));
     let _guard = FanAutoGuard { io, enabled: true };
 
@@ -406,56 +387,35 @@ fn run_fan_loop(io: &TuxedoIo, config: &FanConfig) -> Result<()> {
         on_off(fans_off_available)
     );
 
+    let mut last_target = None;
     while !terminate.load(Ordering::Relaxed) {
-        let target = target_speed(io, fans, min_speed, fans_off_available, &curves)?;
-        for fan in 0..fans {
-            set_fan_percent(io, fan, target)?;
+        let target = target_speed(io, min_speed, fans_off_available, curve)?;
+        if last_target != Some(target) {
+            for fan in 0..fans {
+                set_fan_percent(io, fan, target)?;
+            }
+            last_target = Some(target);
+            eprintln!("fans: set {target}%");
         }
-        eprintln!("fans: set {target}%");
         sleep_interruptible(interval, &terminate);
     }
 
     Ok(())
 }
 
-fn selected_curves(config: &FanConfig) -> FanCurves<'_> {
-    let preset = config.preset.curves();
-    FanCurves {
-        cpu: config.cpu_curve.as_deref().unwrap_or(preset.cpu),
-        gpu: config
-            .gpu_curve
-            .as_deref()
-            .or(config.cpu_curve.as_deref())
-            .unwrap_or(preset.gpu),
-    }
+fn selected_curve(config: &FanConfig) -> &[FanPoint] {
+    config.curve.as_deref().unwrap_or(config.preset.curve())
 }
 
 fn target_speed(
     io: &TuxedoIo,
-    fans: u8,
     min_speed: u8,
     fans_off_available: bool,
-    curves: &FanCurves<'_>,
+    curve: &[FanPoint],
 ) -> Result<u8> {
-    let cpu_temp = read_fan_temp_raw(io, 0)?;
-    let gpu_temp_raw = if fans > 1 {
-        read_fan_temp_raw(io, 1).unwrap_or(0)
-    } else {
-        0
-    };
-    let gpu_temp = if gpu_temp_raw > 0 {
-        gpu_temp_raw
-    } else {
-        cpu_temp
-    };
-
-    let cpu_speed = curve_speed(curves.cpu, cpu_temp);
-    let gpu_speed = curve_speed(curves.gpu, gpu_temp);
-    Ok(apply_hw_limit(
-        cpu_speed.max(gpu_speed),
-        min_speed,
-        fans_off_available,
-    ))
+    let temp = read_fan_temp_raw(io, 0)?;
+    let speed = curve_speed(curve, temp);
+    Ok(apply_hw_limit(speed, min_speed, fans_off_available))
 }
 
 fn curve_speed(curve: &[FanPoint], temp: i32) -> u8 {
@@ -504,7 +464,6 @@ fn fan_count(io: &TuxedoIo) -> u8 {
 fn read_fan_temp_raw(io: &TuxedoIo, fan: u8) -> Result<i32> {
     match fan {
         0 => io.read_int(R_UW_FAN_TEMP),
-        1 => io.read_int(R_UW_FAN_TEMP2),
         _ => Err("fan index out of range".into()),
     }
 }
@@ -548,7 +507,7 @@ const fn p(temp: i32, speed: u8) -> FanPoint {
     FanPoint { temp, speed }
 }
 
-const SILENT_CPU: [FanPoint; 18] = [
+const SILENT: [FanPoint; 18] = [
     p(60, 0),
     p(65, 20),
     p(69, 25),
@@ -569,33 +528,7 @@ const SILENT_CPU: [FanPoint; 18] = [
     p(100, 100),
 ];
 
-const SILENT_GPU: [FanPoint; 23] = [
-    p(59, 0),
-    p(61, 20),
-    p(63, 22),
-    p(64, 23),
-    p(65, 24),
-    p(67, 25),
-    p(68, 28),
-    p(69, 30),
-    p(70, 33),
-    p(71, 37),
-    p(72, 40),
-    p(73, 43),
-    p(74, 44),
-    p(75, 46),
-    p(76, 48),
-    p(78, 52),
-    p(80, 55),
-    p(82, 60),
-    p(84, 65),
-    p(86, 70),
-    p(88, 80),
-    p(90, 90),
-    p(100, 100),
-];
-
-const QUIET_CPU: [FanPoint; 25] = [
+const QUIET: [FanPoint; 25] = [
     p(50, 0),
     p(60, 20),
     p(63, 22),
@@ -623,28 +556,7 @@ const QUIET_CPU: [FanPoint; 25] = [
     p(100, 100),
 ];
 
-const QUIET_GPU: [FanPoint; 18] = [
-    p(50, 0),
-    p(60, 20),
-    p(64, 25),
-    p(68, 30),
-    p(71, 35),
-    p(72, 40),
-    p(73, 43),
-    p(74, 44),
-    p(75, 46),
-    p(76, 48),
-    p(78, 52),
-    p(80, 55),
-    p(82, 60),
-    p(84, 65),
-    p(86, 70),
-    p(88, 80),
-    p(90, 90),
-    p(100, 100),
-];
-
-const BALANCED_CPU: [FanPoint; 26] = [
+const BALANCED: [FanPoint; 26] = [
     p(45, 0),
     p(51, 20),
     p(53, 23),
@@ -673,35 +585,7 @@ const BALANCED_CPU: [FanPoint; 26] = [
     p(100, 100),
 ];
 
-const BALANCED_GPU: [FanPoint; 25] = [
-    p(45, 0),
-    p(51, 20),
-    p(53, 23),
-    p(56, 26),
-    p(59, 30),
-    p(62, 33),
-    p(64, 35),
-    p(65, 38),
-    p(66, 40),
-    p(67, 42),
-    p(68, 45),
-    p(69, 47),
-    p(71, 50),
-    p(72, 52),
-    p(74, 53),
-    p(76, 57),
-    p(78, 60),
-    p(79, 63),
-    p(81, 65),
-    p(83, 70),
-    p(85, 75),
-    p(87, 80),
-    p(88, 85),
-    p(90, 90),
-    p(100, 100),
-];
-
-const COOL_CPU: [FanPoint; 26] = [
+const COOL: [FanPoint; 26] = [
     p(39, 0),
     p(45, 20),
     p(50, 25),
@@ -730,24 +614,7 @@ const COOL_CPU: [FanPoint; 26] = [
     p(100, 100),
 ];
 
-const COOL_GPU: [FanPoint; 14] = [
-    p(39, 0),
-    p(44, 25),
-    p(49, 30),
-    p(54, 35),
-    p(59, 40),
-    p(64, 45),
-    p(69, 50),
-    p(74, 60),
-    p(79, 70),
-    p(84, 75),
-    p(86, 85),
-    p(88, 90),
-    p(90, 95),
-    p(100, 100),
-];
-
-const FREEZY_CPU: [FanPoint; 17] = [
+const FREEZY: [FanPoint; 17] = [
     p(29, 20),
     p(39, 25),
     p(45, 30),
@@ -764,21 +631,5 @@ const FREEZY_CPU: [FanPoint; 17] = [
     p(85, 85),
     p(89, 90),
     p(94, 95),
-    p(100, 100),
-];
-
-const FREEZY_GPU: [FanPoint; 13] = [
-    p(35, 25),
-    p(40, 30),
-    p(45, 35),
-    p(50, 40),
-    p(55, 45),
-    p(60, 50),
-    p(65, 60),
-    p(70, 65),
-    p(75, 70),
-    p(80, 75),
-    p(85, 85),
-    p(90, 95),
     p(100, 100),
 ];
