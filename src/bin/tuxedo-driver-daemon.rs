@@ -69,6 +69,8 @@ struct FanConfig {
     enabled: bool,
     #[serde(default = "default_interval_ms")]
     interval_ms: u64,
+    #[serde(default = "default_hysteresis_c")]
+    hysteresis_c: i32,
     #[serde(default = "default_preset")]
     preset: FanPreset,
     curve: Option<Vec<FanPoint>>,
@@ -79,6 +81,7 @@ impl Default for FanConfig {
         Self {
             enabled: default_fan_enabled(),
             interval_ms: default_interval_ms(),
+            hysteresis_c: default_hysteresis_c(),
             preset: default_preset(),
             curve: None,
         }
@@ -91,6 +94,10 @@ fn default_fan_enabled() -> bool {
 
 fn default_interval_ms() -> u64 {
     1_000
+}
+
+fn default_hysteresis_c() -> i32 {
+    5
 }
 
 fn default_preset() -> FanPreset {
@@ -384,18 +391,33 @@ fn run_fan_loop(io: &TuxedoIo, config: &FanConfig, verbose: bool) -> Result<()> 
     let _guard = FanAutoGuard { io, enabled: true };
 
     eprintln!(
-        "fan control started: fans={fans}, preset={}, interval={interval:?}, min_speed={min_speed}%, fans_off_available={}",
+        "fan control started: fans={fans}, preset={}, interval={interval:?}, hysteresis={}C, min_speed={min_speed}%, fans_off_available={}",
         config.preset.name(),
+        config.hysteresis_c,
         on_off(fans_off_available)
     );
 
+    let mut previous_target = None;
     while !terminate.load(Ordering::Relaxed) {
-        let target = target_speed(io, min_speed, fans_off_available, curve)?;
+        let temp = read_fan_temp_raw(io, 0)?;
+        let mut target = target_speed_for_temp(temp, min_speed, fans_off_available, curve);
+        if let Some(previous) = previous_target {
+            if config.hysteresis_c > 0 && target < previous {
+                let hysteresis_temp = temp.saturating_add(config.hysteresis_c);
+                let hysteresis_target =
+                    target_speed_for_temp(hysteresis_temp, min_speed, fans_off_available, curve);
+                if hysteresis_target >= previous {
+                    target = previous;
+                }
+            }
+        }
+
         for fan in (0..fans).rev() {
             set_fan_percent(io, fan, target)?;
         }
+        previous_target = Some(target);
         if verbose {
-            eprintln!("fans: set {target}%");
+            eprintln!("fans: temp={temp}C set {target}%");
         }
         sleep_interruptible(interval, &terminate);
     }
@@ -407,15 +429,14 @@ fn selected_curve(config: &FanConfig) -> &[FanPoint] {
     config.curve.as_deref().unwrap_or(config.preset.curve())
 }
 
-fn target_speed(
-    io: &TuxedoIo,
+fn target_speed_for_temp(
+    temp: i32,
     min_speed: u8,
     fans_off_available: bool,
     curve: &[FanPoint],
-) -> Result<u8> {
-    let temp = read_fan_temp_raw(io, 0)?;
+) -> u8 {
     let speed = curve_speed(curve, temp);
-    Ok(apply_hw_limit(speed, min_speed, fans_off_available))
+    apply_hw_limit(speed, min_speed, fans_off_available)
 }
 
 fn curve_speed(curve: &[FanPoint], temp: i32) -> u8 {
