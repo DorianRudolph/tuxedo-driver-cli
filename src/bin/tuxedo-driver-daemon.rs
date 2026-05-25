@@ -391,7 +391,8 @@ fn run_fan_loop(io: &TuxedoIo, config: &FanConfig) -> Result<()> {
     while !terminate.load(Ordering::Relaxed) {
         let target = target_speed(io, min_speed, fans_off_available, curve)?;
         let target_changed = last_target != Some(target);
-        let fan_state_matches = !target_changed && fan_state_matches(io, fans, target);
+        let fan_state_matches =
+            !target_changed && fan_state_matches(io, fans, target, min_speed, fans_off_available);
         if target_changed || !fan_state_matches {
             for fan in (0..fans).rev() {
                 set_fan_percent(io, fan, target)?;
@@ -463,10 +464,16 @@ fn fan_count(io: &TuxedoIo) -> u8 {
     fans
 }
 
-fn fan_state_matches(io: &TuxedoIo, fans: u8, target: u8) -> bool {
+fn fan_state_matches(
+    io: &TuxedoIo,
+    fans: u8,
+    target: u8,
+    min_speed: u8,
+    fans_off_available: bool,
+) -> bool {
     (0..fans).all(|fan| {
         read_fan_speed_raw(io, fan)
-            .map(|raw| raw_to_percent(raw) == target)
+            .map(|raw| apply_hw_limit(raw_to_percent(raw), min_speed, fans_off_available) == target)
             .unwrap_or(false)
     })
 }
