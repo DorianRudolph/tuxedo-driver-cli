@@ -391,8 +391,9 @@ fn run_fan_loop(io: &TuxedoIo, config: &FanConfig) -> Result<()> {
     while !terminate.load(Ordering::Relaxed) {
         let target = target_speed(io, min_speed, fans_off_available, curve)?;
         let target_changed = last_target != Some(target);
-        if target_changed {
-            for fan in 0..fans {
+        let fan_state_matches = !target_changed && fan_state_matches(io, fans, target);
+        if target_changed || !fan_state_matches {
+            for fan in (0..fans).rev() {
                 set_fan_percent(io, fan, target)?;
             }
             last_target = Some(target);
@@ -462,6 +463,22 @@ fn fan_count(io: &TuxedoIo) -> u8 {
     fans
 }
 
+fn fan_state_matches(io: &TuxedoIo, fans: u8, target: u8) -> bool {
+    (0..fans).all(|fan| {
+        read_fan_speed_raw(io, fan)
+            .map(|raw| raw_to_percent(raw) == target)
+            .unwrap_or(false)
+    })
+}
+
+fn read_fan_speed_raw(io: &TuxedoIo, fan: u8) -> Result<i32> {
+    match fan {
+        0 => io.read_int(R_UW_FANSPEED),
+        1 => io.read_int(R_UW_FANSPEED2),
+        _ => Err("fan index out of range".into()),
+    }
+}
+
 fn read_fan_temp_raw(io: &TuxedoIo, fan: u8) -> Result<i32> {
     match fan {
         0 => io.read_int(R_UW_FAN_TEMP),
@@ -477,6 +494,10 @@ fn set_fan_percent(io: &TuxedoIo, fan: u8, percent: u8) -> Result<()> {
         _ => return Err("fan index out of range".into()),
     };
     io.write_int(req, raw)
+}
+
+fn raw_to_percent(raw: i32) -> u8 {
+    ((raw as f64 * 100.0 / NB02_FAN_SPEED_MAX).round()).clamp(0.0, 100.0) as u8
 }
 
 fn sysfs(relative: &str) -> PathBuf {
