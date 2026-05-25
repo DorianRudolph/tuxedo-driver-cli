@@ -8,7 +8,7 @@
 [fan]
 enabled = true
 preset = "silent" # silent, quiet, balanced, cool, freezy
-interval_ms = 5000
+interval_ms = 1000
 
 # Optional custom curve. If set, it replaces the selected preset curve.
 # The daemon uses the first entry whose temp is >= the current temperature.

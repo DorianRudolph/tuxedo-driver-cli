@@ -46,6 +46,8 @@ const W_UW_PERF_PROF: IoctlReq = IoctlReq::write(MAGIC_WRITE_UW, 0x18, ArgKind::
 struct Args {
     #[arg(short, long, default_value = DEFAULT_CONFIG)]
     config: PathBuf,
+    #[arg(short, long, help = "Log every fan target write")]
+    verbose: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -88,7 +90,7 @@ fn default_fan_enabled() -> bool {
 }
 
 fn default_interval_ms() -> u64 {
-    5_000
+    1_000
 }
 
 fn default_preset() -> FanPreset {
@@ -300,7 +302,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    run_fan_loop(&io, &config.fan)
+    run_fan_loop(&io, &config.fan, args.verbose)
 }
 
 fn load_config(path: &Path) -> Result<Config> {
@@ -365,7 +367,7 @@ fn set_charging_profile(profile: &str) -> Result<()> {
     write_value(&current, profile)
 }
 
-fn run_fan_loop(io: &TuxedoIo, config: &FanConfig) -> Result<()> {
+fn run_fan_loop(io: &TuxedoIo, config: &FanConfig, verbose: bool) -> Result<()> {
     let terminate = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(SIGTERM, Arc::clone(&terminate))?;
     signal_hook::flag::register(SIGINT, Arc::clone(&terminate))?;
@@ -387,17 +389,12 @@ fn run_fan_loop(io: &TuxedoIo, config: &FanConfig) -> Result<()> {
         on_off(fans_off_available)
     );
 
-    let mut last_target = None;
     while !terminate.load(Ordering::Relaxed) {
         let target = target_speed(io, min_speed, fans_off_available, curve)?;
-        let target_changed = last_target != Some(target);
-        let fan_state_matches =
-            !target_changed && fan_state_matches(io, fans, target, min_speed, fans_off_available);
-        if target_changed || !fan_state_matches {
-            for fan in (0..fans).rev() {
-                set_fan_percent(io, fan, target)?;
-            }
-            last_target = Some(target);
+        for fan in (0..fans).rev() {
+            set_fan_percent(io, fan, target)?;
+        }
+        if verbose {
             eprintln!("fans: set {target}%");
         }
         sleep_interruptible(interval, &terminate);
@@ -464,28 +461,6 @@ fn fan_count(io: &TuxedoIo) -> u8 {
     fans
 }
 
-fn fan_state_matches(
-    io: &TuxedoIo,
-    fans: u8,
-    target: u8,
-    min_speed: u8,
-    fans_off_available: bool,
-) -> bool {
-    (0..fans).all(|fan| {
-        read_fan_speed_raw(io, fan)
-            .map(|raw| apply_hw_limit(raw_to_percent(raw), min_speed, fans_off_available) == target)
-            .unwrap_or(false)
-    })
-}
-
-fn read_fan_speed_raw(io: &TuxedoIo, fan: u8) -> Result<i32> {
-    match fan {
-        0 => io.read_int(R_UW_FANSPEED),
-        1 => io.read_int(R_UW_FANSPEED2),
-        _ => Err("fan index out of range".into()),
-    }
-}
-
 fn read_fan_temp_raw(io: &TuxedoIo, fan: u8) -> Result<i32> {
     match fan {
         0 => io.read_int(R_UW_FAN_TEMP),
@@ -501,10 +476,6 @@ fn set_fan_percent(io: &TuxedoIo, fan: u8, percent: u8) -> Result<()> {
         _ => return Err("fan index out of range".into()),
     };
     io.write_int(req, raw)
-}
-
-fn raw_to_percent(raw: i32) -> u8 {
-    ((raw as f64 * 100.0 / NB02_FAN_SPEED_MAX).round()).clamp(0.0, 100.0) as u8
 }
 
 fn sysfs(relative: &str) -> PathBuf {

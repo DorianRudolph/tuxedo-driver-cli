@@ -53,6 +53,8 @@ cargo build --release
 sudo target/release/tuxedo-driver-daemon --config /etc/tuxedo-driver-daemon.toml
 ```
 
+Add `--verbose` to log every fan target write while testing.
+
 The systemd unit templates are in `systemd/`. Install both units so the daemon
 is stopped before suspend and started again on resume:
 
